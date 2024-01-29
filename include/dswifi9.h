@@ -315,6 +315,15 @@ extern u32 Wifi_GetStats(int statnum);
 //  unsigned short * data:	Pointer to the data to send (should be halfword-aligned)
 //  Returns:				Nothing of interest.
 extern int Wifi_RawTxFrame(unsigned short datalen, unsigned short rate, unsigned short * data);
+// @param step = step of the multiboot process,
+//				0 = Send Beacon
+//				1 = Authentication Response
+//				2 = Association Response
+extern int Wifi_RawTxFrameMultiboot(unsigned short datalen, unsigned short rate, unsigned short* data);
+extern void Wifi_SendAuthenticationResponse(u16 targetMac[3]);
+extern void Wifi_SendAssociationResponse(u16 targetMac[3]);
+extern void Wifi_SendMultibootData(u16 datalen, u16* data, int step);
+extern void Wifi_SendFakeCmdAck();
 
 // Wifi_RawSetPacketHandler: Set a handler to process all raw incoming packets
 //  WifiPacketHandler wphfunc:  Pointer to packet handler (see WifiPacketHandler definition for more info)
@@ -332,6 +341,8 @@ extern int Wifi_RxRawReadPacket(long packetID, long readlength, unsigned short *
 // Wifi_Update: Checks for new data from the arm7 and initiates routing if data
 //   is available.
 extern void Wifi_Update();
+
+extern int Wifi_SendOpenSystemAuthPacket();
 
 // Wifi_Sync: Call this function when requested to sync by the arm7 side of the
 //   wifi lib

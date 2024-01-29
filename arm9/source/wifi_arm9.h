@@ -96,10 +96,15 @@ bool Wifi_InitDefault(bool useFirmwareSettings);
 extern int Wifi_CheckInit();
 
 extern int Wifi_RawTxFrame(u16 datalen, u16 rate, u16 * data);
+extern int Wifi_RawTxFrameMultiboot(u16 datalen, u16 rate, u16* data);
 extern void Wifi_SetSyncHandler(WifiSyncHandler wshfunc);
 extern void Wifi_RawSetPacketHandler(WifiPacketHandler wphfunc);
 extern int Wifi_RxRawReadPacket(s32 packetID, s32 readlength, u16 * data);
+extern void Wifi_SendAuthenticationResponse(u16 targetMac[3]);
+extern void Wifi_SendAssociationResponse(u16 targetMac[3]);
 
+extern void Wifi_SendMultibootData(u16 datalen, u16* data, int step);
+extern void Wifi_SendFakeCmdAck();
 extern void Wifi_DisableWifi();
 extern void Wifi_EnableWifi();
 extern void Wifi_SetPromiscuousMode(int enable);

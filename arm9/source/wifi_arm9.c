@@ -453,6 +453,435 @@ int Wifi_RawTxFrame(u16 datalen, u16 rate, u16 * data) {
 }
 
 
+// TODO merge redundant functions
+int Wifi_RawTxFrameMultiboot(u16 datalen, u16 rate, u16* data) {
+	if (wirelessMode == PACKET_MODE_WIFI) {
+		// Not Supported
+	}
+	else if (wirelessMode == PACKET_MODE_NIFI) {
+		int base, framelen, hdrlen, writelen;
+		int copytotal, copyexpect;
+		u16 framehdr[6 + 12 + 2];
+		framelen = datalen + 8 + (WifiData->wepmode7 ? 4 : 0);
+
+		if (framelen + 40 > Wifi_TxBufferWordsAvailable() * 2) {
+			// error, can't send this much!
+			SGIP_DEBUG_MESSAGE(("Transmit:err_space"));
+			return -1;
+		}
+
+		
+
+		framehdr[0] = 0x01;
+		framehdr[1] = 0;
+		framehdr[2] = 0;
+		framehdr[3] = 0;
+		framehdr[4] = 0; // rate, will be filled in by the arm7.
+		hdrlen = 18;
+		framehdr[6] = 0x80;
+		framehdr[7] = 0;
+
+
+		// MACs.
+		memset(framehdr + 8, 0xFF, 6);
+
+		if (WifiData->wepmode7) {
+			framehdr[6] |= 0x4000;
+			hdrlen = 20;
+		}
+
+		framehdr[11] = WifiData->MacAddr[0];
+		framehdr[12] = WifiData->MacAddr[1];
+		framehdr[13] = WifiData->MacAddr[2];
+		framehdr[14] = WifiData->MacAddr[0];
+		framehdr[15] = WifiData->MacAddr[1];
+		framehdr[16] = WifiData->MacAddr[2];
+		framehdr[17] = 0;
+		framehdr[18] = 0; // wep IV, will be filled in if needed on the arm7 side.
+		framehdr[19] = 0;
+
+		framehdr[5] = framelen + hdrlen * 2 - 12 + 4;
+		copyexpect = ((framelen + hdrlen * 2 - 12 + 4) + 12 - 4 + 1) / 2;
+		copytotal = 0;
+
+		WifiData->stats[WSTAT_TXQUEUEDPACKETS]++;
+		WifiData->stats[WSTAT_TXQUEUEDBYTES] += framelen + hdrlen * 2;
+
+		base = WifiData->txbufOut;
+		Wifi_TxBufferWrite(base, hdrlen, framehdr);
+		base += hdrlen;
+		copytotal += hdrlen;
+		if (base >= (WIFI_TXBUFFER_SIZE / 2)) {
+			base -= WIFI_TXBUFFER_SIZE / 2;
+		}
+
+		// add LLC header
+		framehdr[0] = 0xAAAA;
+		framehdr[1] = 0x0003;
+		framehdr[2] = 0x0000;
+		unsigned short protocol = 0x08FE;
+		framehdr[3] = ((protocol >> 8) & 0xFF) | ((protocol << 8) & 0xFF00);
+
+		Wifi_TxBufferWrite(base, 4, framehdr);
+		base += 4;
+		copytotal += 4;
+
+		if (base >= (WIFI_TXBUFFER_SIZE / 2)) {
+			base -= WIFI_TXBUFFER_SIZE / 2;
+		}
+
+		writelen = datalen;
+		if (writelen) {
+			Wifi_TxBufferWrite(base, (writelen + 1) / 2, data);
+			base += (writelen + 1) / 2;
+			copytotal += (writelen + 1) / 2;
+			if (base >= (WIFI_TXBUFFER_SIZE / 2)) {
+				base -= WIFI_TXBUFFER_SIZE / 2;
+			}
+		}
+
+		if (WifiData->wepmode7) {
+			// add required extra bytes
+			base += 2;
+			copytotal += 2;
+			if (base >= (WIFI_TXBUFFER_SIZE / 2)) {
+				base -= WIFI_TXBUFFER_SIZE / 2;
+			}
+		}
+
+		// update fifo out pos, done sending packet.
+		WifiData->txbufOut = base;
+		if (copytotal != copyexpect) {
+			SGIP_DEBUG_MESSAGE(("Tx exp:%i que:%i", copyexpect, copytotal));
+		}
+	}
+
+	if (synchandler) synchandler();
+	return 0;
+}
+
+void Wifi_SendAuthenticationResponse(u16 targetMac[3]) {
+	int base, framelen, hdrlen;
+	u16 framehdr[6 + 12 + 2];
+	framelen = 0 + 8 + (WifiData->wepmode7 ? 4 : 0);
+
+	if (framelen + 40 > Wifi_TxBufferWordsAvailable() * 2) {
+		// error, can't send this much!
+		SGIP_DEBUG_MESSAGE(("Transmit:err_space"));
+	}
+
+	framehdr[0] = 0;
+	framehdr[1] = 0;
+	framehdr[2] = 0;
+	framehdr[3] = 0;
+	framehdr[4] = 0x0014; // rate, will be filled in by the arm7.
+	hdrlen = 18;
+	framehdr[6] = 0xB0;
+	framehdr[7] = 0;
+
+	framehdr[8] = targetMac[0];
+	framehdr[9] = targetMac[1];
+	framehdr[10] = targetMac[2];
+	framehdr[11] = WifiData->MacAddr[0];
+	framehdr[12] = WifiData->MacAddr[1];
+	framehdr[13] = WifiData->MacAddr[2];
+	framehdr[14] = WifiData->MacAddr[0];
+	framehdr[15] = WifiData->MacAddr[1];
+	framehdr[16] = WifiData->MacAddr[2];
+
+	if (WifiData->wepmode7) {
+		framehdr[6] |= 0x4000;
+		hdrlen = 20;
+	}
+
+	framehdr[17] = 0;
+	framehdr[18] = 0; // wep IV, will be filled in if needed on the arm7 side.
+	framehdr[19] = 0;
+
+	framehdr[5] = framelen + hdrlen * 2 - 12 + 2;
+
+	WifiData->stats[WSTAT_TXQUEUEDPACKETS]++;
+	WifiData->stats[WSTAT_TXQUEUEDBYTES] += framelen + hdrlen * 2;
+
+	base = WifiData->txbufOut;
+	Wifi_TxBufferWrite(base, hdrlen, framehdr);
+	base += hdrlen;
+	if (base >= (WIFI_TXBUFFER_SIZE / 2)) {
+		base -= WIFI_TXBUFFER_SIZE / 2;
+	}
+
+	framehdr[0] = 0;
+	framehdr[1] = 0x02; 
+	framehdr[2] = 0;
+
+	Wifi_TxBufferWrite(base, 3, framehdr);
+	base += 3;
+	if (base >= (WIFI_TXBUFFER_SIZE / 2)) {
+		base -= WIFI_TXBUFFER_SIZE / 2;
+	}
+
+
+	if (WifiData->wepmode7) {
+		// add required extra bytes
+		base += 2;
+		if (base >= (WIFI_TXBUFFER_SIZE / 2)) {
+			base -= WIFI_TXBUFFER_SIZE / 2;
+		}
+	}
+
+	// update fifo out pos, done sending packet.
+	WifiData->txbufOut = base;
+}
+
+void Wifi_SendAssociationResponse(u16 targetMac[3]) {
+	int base, framelen, hdrlen;
+	u16 framehdr[6 + 12 + 2];
+	framelen = 0 + 8 + (WifiData->wepmode7 ? 4 : 0);
+
+	if (framelen + 40 > Wifi_TxBufferWordsAvailable() * 2) {
+		// error, can't send this much!
+		SGIP_DEBUG_MESSAGE(("Transmit:err_space"));
+	}
+
+	framehdr[0] = 0;
+	framehdr[1] = 0;
+	framehdr[2] = 0;
+	framehdr[3] = 0;
+	framehdr[4] = 0x0014; // rate, will be filled in by the arm7.
+	hdrlen = 18;
+	framehdr[6] = 0x10;
+	framehdr[7] = 0;
+
+	framehdr[8] = targetMac[0];
+	framehdr[9] = targetMac[1];
+	framehdr[10] = targetMac[2];
+	framehdr[11] = WifiData->MacAddr[0];
+	framehdr[12] = WifiData->MacAddr[1];
+	framehdr[13] = WifiData->MacAddr[2];
+	framehdr[14] = WifiData->MacAddr[0];
+	framehdr[15] = WifiData->MacAddr[1];
+	framehdr[16] = WifiData->MacAddr[2];
+
+	if (WifiData->wepmode7) {
+		framehdr[6] |= 0x4000;
+		hdrlen = 20;
+	}
+
+	framehdr[17] = 0;
+	framehdr[18] = 0; // wep IV, will be filled in if needed on the arm7 side.
+	framehdr[19] = 0;
+
+	framehdr[5] = framelen + hdrlen * 2 - 12 + 6;
+
+	WifiData->stats[WSTAT_TXQUEUEDPACKETS]++;
+	WifiData->stats[WSTAT_TXQUEUEDBYTES] += framelen + hdrlen * 2;
+
+	base = WifiData->txbufOut;
+	Wifi_TxBufferWrite(base, hdrlen, framehdr);
+	base += hdrlen;
+	if (base >= (WIFI_TXBUFFER_SIZE / 2)) {
+		base -= WIFI_TXBUFFER_SIZE / 2;
+	}
+
+	framehdr[0] = 0x21; // Capability
+	framehdr[1] = 0; // Status 0x00 = Successful
+	framehdr[2] = 0xc010; // Association ID
+	framehdr[3] = 0x0201; // Association ID
+	framehdr[4] = 0x8482; // Supported Rates
+
+	Wifi_TxBufferWrite(base, 5, framehdr);
+	base += 5;
+	if (base >= (WIFI_TXBUFFER_SIZE / 2)) {
+		base -= WIFI_TXBUFFER_SIZE / 2;
+	}
+
+
+	if (WifiData->wepmode7) {
+		// add required extra bytes
+		base += 2;
+		if (base >= (WIFI_TXBUFFER_SIZE / 2)) {
+			base -= WIFI_TXBUFFER_SIZE / 2;
+		}
+	}
+
+	// update fifo out pos, done sending packet.
+	WifiData->txbufOut = base;
+}
+
+void Wifi_SendMultibootData(u16 datalen, u16* data, int step) {
+	int base, framelen, hdrlen, writelen;
+	u16 framehdr[6 + 12 + 2];
+	framelen = datalen + 8 + (WifiData->wepmode7 ? 4 : 0);
+
+	if (framelen + 40 > Wifi_TxBufferWordsAvailable() * 2) {
+		// error, can't send this much!
+		SGIP_DEBUG_MESSAGE(("Transmit:err_space"));
+	}
+
+	framehdr[0] = 0;
+	framehdr[1] = 0x02;
+	framehdr[2] = 0;
+	framehdr[3] = 0x5A5A;
+	framehdr[4] = 0x0014; // rate, will be filled in by the arm7.
+	hdrlen = 18;
+	framehdr[6] = 0x0228;
+	framehdr[7] = 0x0200;
+
+	framehdr[8] = 0x0903;
+	framehdr[9] = 0x00BF;
+	framehdr[10] = 0;
+	framehdr[11] = WifiData->MacAddr[0];
+	framehdr[12] = WifiData->MacAddr[1];
+	framehdr[13] = WifiData->MacAddr[2];
+	framehdr[14] = WifiData->MacAddr[0];
+	framehdr[15] = WifiData->MacAddr[1];
+	framehdr[16] = WifiData->MacAddr[2];
+
+	if (WifiData->wepmode7) {
+		framehdr[6] |= 0x4000;
+		hdrlen = 20;
+	}
+
+	framehdr[17] = 0;
+	framehdr[18] = 0; // wep IV, will be filled in if needed on the arm7 side.
+	framehdr[19] = 0;
+
+	framehdr[5] = framelen + hdrlen * 2 - 12 + 4;
+
+	WifiData->stats[WSTAT_TXQUEUEDPACKETS]++;
+	WifiData->stats[WSTAT_TXQUEUEDBYTES] += framelen + hdrlen * 2;
+
+	base = WifiData->txbufOut;
+	Wifi_TxBufferWrite(base, hdrlen, framehdr);
+	base += hdrlen;
+	if (base >= (WIFI_TXBUFFER_SIZE / 2)) {
+		base -= WIFI_TXBUFFER_SIZE / 2;
+	}
+
+	framehdr[0] = 0x0106; // Value for W_CMD_REPLYTIME (0106h)
+	framehdr[1] = 0x02; // Slave Flags, bit1..15 for slave 1..15 (1=connected) (eg. 0002h)
+	framehdr[2] = 0x1100 + (datalen/2); // Size in halfwords of Command+Data (ie. [06h..end, excluding footer]) + Flags (11h=Normal, 01h=Footerless/Can be ignored, 00h=Deauth'ed?)
+	
+	switch (step) {// Command (00h=Dummy/NameDone/RsaDone/DataDone, 01h=NameRequest, 03h=RSA, 04h=DataPacket, 05h=Done)
+		case 0:
+			framehdr[3] = 0; 			
+			break;
+		case 1:
+			framehdr[3] = 1; 			
+			break;
+		case 2:
+			framehdr[3] = 3;
+			break;
+		case 3:
+			framehdr[3] = 4;
+			break;
+		case 4:
+			framehdr[3] = 5;
+			break;
+		default:
+			framehdr[3] = 0xFF;
+			break;
+	}
+
+	Wifi_TxBufferWrite(base, 4, framehdr);
+	base += 4;
+	if (base >= (WIFI_TXBUFFER_SIZE / 2)) {
+		base -= WIFI_TXBUFFER_SIZE / 2;
+	}
+
+	writelen = datalen;
+	if (writelen) {
+		Wifi_TxBufferWrite(base, (writelen + 1) / 2, data);
+		base += (writelen + 1) / 2;
+		if (base >= (WIFI_TXBUFFER_SIZE / 2)) {
+			base -= WIFI_TXBUFFER_SIZE / 2;
+		}
+	}
+
+	if (WifiData->wepmode7) {
+		// add required extra bytes
+		base += 2;
+		if (base >= (WIFI_TXBUFFER_SIZE / 2)) {
+			base -= WIFI_TXBUFFER_SIZE / 2;
+		}
+	}
+
+	// update fifo out pos, done sending packet.
+	WifiData->txbufOut = base;
+}
+void Wifi_SendFakeCmdAck() {
+	int base, framelen, hdrlen;
+	u16 framehdr[6 + 12 + 2];
+	framelen = 0 + 4 + (WifiData->wepmode7 ? 4 : 0);
+
+	if (framelen + 40 > Wifi_TxBufferWordsAvailable() * 2) {
+		// error, can't send this much!
+		SGIP_DEBUG_MESSAGE(("Transmit:err_space"));
+	}
+
+	framehdr[0] = 0x01E8;
+	framehdr[1] = 0;
+	framehdr[2] = 0;
+	framehdr[3] = 0;
+	framehdr[4] = 0x4414; // rate, will be filled in by the arm7.
+	hdrlen = 18;
+	framehdr[6] = 0x0218;
+	framehdr[7] = 0;
+
+	framehdr[8] = 0x0903;
+	framehdr[9] = 0x00BF;
+	framehdr[10] = 0x0300;
+	framehdr[11] = WifiData->MacAddr[0];
+	framehdr[12] = WifiData->MacAddr[1];
+	framehdr[13] = WifiData->MacAddr[2];
+	framehdr[14] = WifiData->MacAddr[0];
+	framehdr[15] = WifiData->MacAddr[1];
+	framehdr[16] = WifiData->MacAddr[2];
+
+	if (WifiData->wepmode7) {
+		framehdr[6] |= 0x4000;
+		hdrlen = 20;
+	}
+
+	framehdr[17] = 0;
+	framehdr[18] = 0; // wep IV, will be filled in if needed on the arm7 side.
+	framehdr[19] = 0;
+
+	framehdr[5] = framelen + hdrlen * 2 - 12 + 4;
+
+	WifiData->stats[WSTAT_TXQUEUEDPACKETS]++;
+	WifiData->stats[WSTAT_TXQUEUEDBYTES] += framelen + hdrlen * 2;
+
+	base = WifiData->txbufOut;
+	Wifi_TxBufferWrite(base, hdrlen, framehdr);
+	base += hdrlen;
+	if (base >= (WIFI_TXBUFFER_SIZE / 2)) {
+		base -= WIFI_TXBUFFER_SIZE / 2;
+	}
+
+	framehdr[0] = 0x53;
+	framehdr[1] = 0;
+	framehdr[2] = 0;
+
+	Wifi_TxBufferWrite(base, 2, framehdr);
+	base += 2;
+	if (base >= (WIFI_TXBUFFER_SIZE / 2)) {
+		base -= WIFI_TXBUFFER_SIZE / 2;
+	}
+
+
+	if (WifiData->wepmode7) {
+		// add required extra bytes
+		base += 2;
+		if (base >= (WIFI_TXBUFFER_SIZE / 2)) {
+			base -= WIFI_TXBUFFER_SIZE / 2;
+		}
+	}
+
+	// update fifo out pos, done sending packet.
+	WifiData->txbufOut = base;
+}
+
 void Wifi_RawSetPacketHandler(WifiPacketHandler wphfunc) {
 	packethandler=wphfunc;
 }
@@ -1018,7 +1447,7 @@ void Wifi_Update() {
 
 		// check if we have a handler
 		if(packethandler) {
-			base2=base+6;
+			base2=base;
 			if(base2>=(WIFI_RXBUFFER_SIZE/2)) base2-=(WIFI_RXBUFFER_SIZE/2);
 			(*packethandler)(base2,len);
 		}
